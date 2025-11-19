@@ -1,16 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:vibration/vibration.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:toastification/toastification.dart';
 import 'dart:async';
 import 'dart:math';
 
-// Constante para el umbral de activación (en microteslas)
-const double UMBRAL_MAGNETICO = 50.0;
-// Duración de la vibración en milisegundos (1 segundo)
-const int DURACION_VIBRACION_MS = 1000;
+// Valores predeterminados y claves de Shared Preferences
+const double umbralDefecto = 150.0;
+const double duracionEfectoSegundos = 1.0;
+const double pausaEfectoSegundos = 2.0;
+
+const String textoUmbral = 'umbral';
+const String textoDuracion = 'duracion';
+const String textoPausa = 'pausa';
 
 void main() {
-  // Asegúrate de que Flutter está inicializado antes de ejecutar la aplicación
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const MagneticSensorApp());
 }
@@ -20,10 +25,13 @@ class MagneticSensorApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Detector Magnético',
-      theme: ThemeData(primarySwatch: Colors.blue),
-      home: const MagneticDetectorScreen(),
+    return ToastificationWrapper(
+      child: MaterialApp(
+        title: 'Vibramag: Detector Magnético',
+        theme: ThemeData(primarySwatch: Colors.blue, useMaterial3: true),
+        home: const MagneticDetectorScreen(),
+        debugShowCheckedModeBanner: false,
+      ),
     );
   }
 }
@@ -36,21 +44,62 @@ class MagneticDetectorScreen extends StatefulWidget {
 }
 
 class _MagneticDetectorScreenState extends State<MagneticDetectorScreen> {
-  // Almacena las lecturas del sensor
-  double _x = 0.0;
-  double _y = 0.0;
-  double _z = 0.0;
-  // Almacena la magnitud del campo magnético
+  // Configuración de la aplicación
+  double _umbral = umbralDefecto; // Umbral de campo magnético (100 a 500)
+  double _duracionS =
+      duracionEfectoSegundos; // Duración de vibración en segundos (1 a 3)
+  double _pausaS =
+      pausaEfectoSegundos; // Pausa entre vibraciones en segundos (0 a 5)
+
+  // Lecturas del sensor
   double _magnitud = 0.0;
-  // Almacena la suscripción al stream del sensor
   StreamSubscription<MagnetometerEvent>? _magnetometerSubscription;
-  // Bandera para evitar vibraciones repetidas muy rápidamente
   bool _estaVibrando = false;
+
+  // Para la persistencia de datos
+  late SharedPreferences _prefs;
 
   @override
   void initState() {
     super.initState();
-    // Suscribirse a los eventos del magnetómetro
+    _cargarConfiguracion();
+  }
+
+  // --- PERSISTENCIA DE DATOS (SharedPreferences) ---
+
+  // 1. Cargar la configuración guardada
+  void _cargarConfiguracion() async {
+    _prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _umbral = _prefs.getDouble(textoUmbral) ?? umbralDefecto;
+      _duracionS = _prefs.getDouble(textoDuracion) ?? duracionEfectoSegundos;
+      _pausaS = _prefs.getDouble(textoPausa) ?? pausaEfectoSegundos;
+    });
+    // Iniciar el sensor una vez que la configuración se ha cargado
+    _iniciarSensor();
+  }
+
+  // 2. Guardar el nuevo valor del umbral
+  void _guardarUmbral(double nuevoUmbral) async {
+    setState(() => _umbral = nuevoUmbral);
+    await _prefs.setDouble(textoUmbral, nuevoUmbral);
+  }
+
+  // 3. Guardar el nuevo valor de la duración
+  void _guardarDuracion(double nuevaDuracion) async {
+    setState(() => _duracionS = nuevaDuracion);
+    await _prefs.setDouble(textoDuracion, nuevaDuracion);
+  }
+
+  // 4. Guardar el nuevo valor de la pausa
+  void _guardarPausa(double nuevaPausa) async {
+    setState(() => _pausaS = nuevaPausa);
+    await _prefs.setDouble(textoPausa, nuevaPausa);
+  }
+
+  // --- GESTIÓN DEL SENSOR ---
+
+  void _iniciarSensor() {
     _magnetometerSubscription = magnetometerEventStream().listen(
       (MagnetometerEvent event) {
         // Calcular la magnitud del campo magnético total (en microteslas)
@@ -59,26 +108,21 @@ class _MagneticDetectorScreenState extends State<MagneticDetectorScreen> {
         );
 
         setState(() {
-          _x = event.x;
-          _y = event.y;
-          _z = event.z;
           _magnitud = magnitudCalculada;
         });
 
         // Comprobar el umbral
-        if (_magnitud > UMBRAL_MAGNETICO && !_estaVibrando) {
+        if (_magnitud > _umbral && !_estaVibrando) {
           _vibrarDispositivo();
         }
       },
       onError: (error) {
-        // Manejo de errores (por ejemplo, sensor no disponible)
-        setState(() {
-          _x = double.nan;
-          _y = double.nan;
-          _z = double.nan;
-          _magnitud = double.nan;
-        });
-        print('Error en el sensor magnético: $error');
+        toastification.show(
+          title: Text('Error en el sensor magnético: $error'),
+          type: ToastificationType.error,
+          autoCloseDuration: const Duration(seconds: 5),
+        );
+        setState(() => _magnitud = double.nan);
       },
       cancelOnError: true,
     );
@@ -86,131 +130,189 @@ class _MagneticDetectorScreenState extends State<MagneticDetectorScreen> {
 
   // Función para manejar la vibración
   void _vibrarDispositivo() async {
-    // 1. Comprueba si el dispositivo puede vibrar
-    if (await Vibration.hasVibrator() ?? false) {
+    // Calcular duraciones en milisegundos
+    final int duracionMs = (_duracionS * 1000).round();
+    final int pausaMs = (_pausaS * 1000).round();
+
+    // Comprueba si el dispositivo puede vibrar
+    if (await Vibration.hasVibrator()) {
       _estaVibrando = true;
 
-      // 2. Vibrar durante el tiempo especificado
-      Vibration.vibrate(duration: DURACION_VIBRACION_MS);
+      // Vibrar durante el tiempo especificado
+      Vibration.vibrate(duration: duracionMs);
 
-      // 3. Esperar el tiempo de vibración + un pequeño margen antes de permitir otra vibración
-      await Future.delayed(
-        const Duration(milliseconds: DURACION_VIBRACION_MS + 500),
-      );
+      // Esperar el tiempo de la pausa antes de permitir otra vibración
+      // NOTA: Se espera la pausa, no la duración, para evitar un bucle de vibración constante
+      // si el campo magnético sigue alto.
+      await Future.delayed(Duration(milliseconds: pausaMs));
 
       _estaVibrando = false;
     } else {
-      print(
-        'El dispositivo no tiene capacidad de vibración o el permiso no está concedido.',
+      toastification.show(
+        title: const Text('El dispositivo no puede vibrar o falta el permiso.'),
+        type: ToastificationType.error,
+        autoCloseDuration: const Duration(seconds: 5),
       );
     }
   }
 
   @override
   void dispose() {
-    // Cancelar la suscripción para evitar fugas de memoria
     _magnetometerSubscription?.cancel();
     super.dispose();
   }
 
+  // --- INTERFAZ DE USUARIO (BUILD) ---
+
   @override
   Widget build(BuildContext context) {
-    final bool umbralSuperado = _magnitud > UMBRAL_MAGNETICO;
+    final bool umbralSuperado = _magnitud > _umbral;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Detector de Campo Magnético'),
+        title: const Text('Vibramag: Detector Magnético'),
         backgroundColor: umbralSuperado ? Colors.red : Colors.blue,
       ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              // Indicador de estado visual
-              Icon(
-                umbralSuperado ? Icons.warning : Icons.check_circle,
-                color: umbralSuperado ? Colors.red : Colors.green,
-                size: 80,
-              ),
-              const SizedBox(height: 20),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            // Sección de Detección en Tiempo Real
+            _buildDetectionStatus(umbralSuperado),
 
-              Text(
-                umbralSuperado
-                    ? '⚠️ ¡UMBRAL SUPERADO! El móvil vibró.'
-                    : 'Campo Magnético Normal.',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: umbralSuperado ? Colors.red : Colors.green.shade800,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 30),
+            const Divider(height: 30),
 
-              // Valores del sensor
-              const Text(
-                'Lecturas del Magnetómetro:',
-                style: TextStyle(fontSize: 18),
-              ),
-              const SizedBox(height: 10),
+            // Sección de Configuración
+            Text(
+              'Ajustes de Vibración',
+              style: Theme.of(context).textTheme.headlineSmall,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 15),
 
-              // Magnitud Total
-              Card(
-                color: umbralSuperado
-                    ? Colors.red.shade100
-                    : Colors.blue.shade100,
-                child: Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Text(
-                    'Magnitud Total: ${_magnitud.toStringAsFixed(2)} μT',
-                    style: const TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
+            // 1. Slider de Umbral Magnético
+            _buildSlider(
+              'Umbral de Vibración (μT)',
+              _umbral,
+              100.0,
+              500.0,
+              (value) => _guardarUmbral(value),
+              '${_umbral.toStringAsFixed(0)} μT',
+            ),
+            const SizedBox(height: 20),
 
-              // Componentes X, Y, Z
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  _buildSensorValue('Eje X', _x),
-                  _buildSensorValue('Eje Y', _y),
-                  _buildSensorValue('Eje Z', _z),
-                ],
-              ),
-              const SizedBox(height: 30),
+            // 2. Slider de Duración de Vibración
+            _buildSlider(
+              'Duración de la Vibración (s)',
+              _duracionS,
+              1.0,
+              3.0,
+              (value) => _guardarDuracion(value),
+              '${_duracionS.toStringAsFixed(1)} s',
+            ),
+            const SizedBox(height: 20),
 
-              // Umbral de activación
-              Text(
-                'Umbral de Vibración: ${UMBRAL_MAGNETICO.toStringAsFixed(1)} μT',
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
-            ],
-          ),
+            // 3. Slider de Pausa entre Vibraciones
+            _buildSlider(
+              'Pausa entre Vibraciones (s)',
+              _pausaS,
+              0.0,
+              5.0,
+              (value) => _guardarPausa(value),
+              '${_pausaS.toStringAsFixed(1)} s',
+            ),
+          ],
         ),
       ),
     );
   }
 
-  // Widget auxiliar para mostrar los valores individuales
-  Widget _buildSensorValue(String label, double value) {
-    return Column(
-      children: [
-        Text(
-          label,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+  // Widget para el estado de detección
+  Widget _buildDetectionStatus(bool umbralSuperado) {
+    return Card(
+      color: umbralSuperado ? Colors.red.shade100 : Colors.green.shade100,
+      elevation: 4,
+      child: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          children: [
+            Icon(
+              umbralSuperado ? Icons.warning : Icons.sensors,
+              color: umbralSuperado ? Colors.red : Colors.green.shade700,
+              size: 50,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Magnitud Actual:',
+              style: TextStyle(fontSize: 18, color: Colors.grey.shade700),
+            ),
+            Text(
+              _magnitud.isNaN ? 'N/A' : '${_magnitud.toStringAsFixed(2)} μT',
+              style: TextStyle(
+                fontSize: 40,
+                fontWeight: FontWeight.w900,
+                color: umbralSuperado
+                    ? Colors.red.shade800
+                    : Colors.green.shade800,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              umbralSuperado
+                  ? '¡UMBRAL SUPERADO! (${_umbral.toStringAsFixed(0)} μT)'
+                  : 'Por debajo del umbral.',
+              style: const TextStyle(fontSize: 16, fontStyle: FontStyle.italic),
+            ),
+          ],
         ),
-        Text(
-          value.isNaN ? 'N/A' : value.toStringAsFixed(2),
-          style: const TextStyle(fontSize: 16),
+      ),
+    );
+  }
+
+  // Widget auxiliar para construir cada Slider de configuración
+  Widget _buildSlider(
+    String label,
+    double currentValue,
+    double min,
+    double max,
+    ValueChanged<double> onChanged,
+    String displayValue,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label, style: const TextStyle(fontSize: 16)),
+            Text(
+              displayValue,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+        Slider(
+          value: currentValue,
+          min: min,
+          max: max,
+          divisions: ((max - min) * 10)
+              .round(), // 10 divisiones por unidad para mejor granularidad
+          label: displayValue,
+          onChanged: onChanged,
+        ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              min.toStringAsFixed(1),
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            Text(
+              max.toStringAsFixed(1),
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
         ),
       ],
     );
