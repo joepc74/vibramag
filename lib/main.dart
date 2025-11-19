@@ -10,10 +10,12 @@ import 'dart:math';
 const double umbralDefecto = 150.0;
 const double duracionEfectoSegundos = 1.0;
 const double pausaEfectoSegundos = 2.0;
+const int amplitudDefecto = 128;
 
-const String textoUmbral = 'umbral';
-const String textoDuracion = 'duracion';
-const String textoPausa = 'pausa';
+const String keyUmbral = 'umbral';
+const String keyDuracion = 'duracion';
+const String keyPausa = 'pausa';
+const String keyAmplitud = 'amplitud';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -50,6 +52,7 @@ class _MagneticDetectorScreenState extends State<MagneticDetectorScreen> {
       duracionEfectoSegundos; // Duración de vibración en segundos (1 a 3)
   double _pausaS =
       pausaEfectoSegundos; // Pausa entre vibraciones en segundos (0 a 5)
+  int _amplitud = amplitudDefecto; // Amplitud de vibración (1 a 255)
 
   // Lecturas del sensor
   double _magnitud = 0.0;
@@ -71,9 +74,10 @@ class _MagneticDetectorScreenState extends State<MagneticDetectorScreen> {
   void _cargarConfiguracion() async {
     _prefs = await SharedPreferences.getInstance();
     setState(() {
-      _umbral = _prefs.getDouble(textoUmbral) ?? umbralDefecto;
-      _duracionS = _prefs.getDouble(textoDuracion) ?? duracionEfectoSegundos;
-      _pausaS = _prefs.getDouble(textoPausa) ?? pausaEfectoSegundos;
+      _umbral = _prefs.getDouble(keyUmbral) ?? umbralDefecto;
+      _duracionS = _prefs.getDouble(keyDuracion) ?? duracionEfectoSegundos;
+      _pausaS = _prefs.getDouble(keyPausa) ?? pausaEfectoSegundos;
+      _amplitud = _prefs.getInt(keyAmplitud) ?? amplitudDefecto;
     });
     // Iniciar el sensor una vez que la configuración se ha cargado
     _iniciarSensor();
@@ -82,19 +86,25 @@ class _MagneticDetectorScreenState extends State<MagneticDetectorScreen> {
   // 2. Guardar el nuevo valor del umbral
   void _guardarUmbral(double nuevoUmbral) async {
     setState(() => _umbral = nuevoUmbral);
-    await _prefs.setDouble(textoUmbral, nuevoUmbral);
+    await _prefs.setDouble(keyUmbral, nuevoUmbral);
   }
 
   // 3. Guardar el nuevo valor de la duración
   void _guardarDuracion(double nuevaDuracion) async {
     setState(() => _duracionS = nuevaDuracion);
-    await _prefs.setDouble(textoDuracion, nuevaDuracion);
+    await _prefs.setDouble(keyDuracion, nuevaDuracion);
   }
 
   // 4. Guardar el nuevo valor de la pausa
   void _guardarPausa(double nuevaPausa) async {
     setState(() => _pausaS = nuevaPausa);
-    await _prefs.setDouble(textoPausa, nuevaPausa);
+    await _prefs.setDouble(keyPausa, nuevaPausa);
+  }
+
+  // 5. Guardar el nuevo valor de la amplitud
+  void _guardarAmplitud(int nuevaAmplitud) async {
+    setState(() => _amplitud = nuevaAmplitud);
+    await _prefs.setInt(keyAmplitud, nuevaAmplitud);
   }
 
   // --- GESTIÓN DEL SENSOR ---
@@ -139,8 +149,11 @@ class _MagneticDetectorScreenState extends State<MagneticDetectorScreen> {
       _estaVibrando = true;
 
       // Vibrar durante el tiempo especificado
-      Vibration.vibrate(duration: duracionMs);
-
+      Vibration.vibrate(
+        duration: duracionMs,
+        amplitude:
+            _amplitud, // Amplitud media para evitar vibraciones muy fuertes
+      );
       // Esperar el tiempo de la pausa antes de permitir otra vibración
       // NOTA: Se espera la pausa, no la duración, para evitar un bucle de vibración constante
       // si el campo magnético sigue alto.
@@ -222,6 +235,15 @@ class _MagneticDetectorScreenState extends State<MagneticDetectorScreen> {
               (value) => _guardarPausa(value),
               '${_pausaS.toStringAsFixed(1)} s',
             ),
+            // 4. Slider de amplitud
+            _buildSlider(
+              'Amplitud de las Vibraciones',
+              _amplitud.toDouble(),
+              1.0,
+              255.0,
+              (value) => _guardarAmplitud(value.round()),
+              _amplitud.toStringAsFixed(0),
+            ),
           ],
         ),
       ),
@@ -277,8 +299,9 @@ class _MagneticDetectorScreenState extends State<MagneticDetectorScreen> {
     double min,
     double max,
     ValueChanged<double> onChanged,
-    String displayValue,
-  ) {
+    String displayValue, {
+    int divisiones = 10,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -296,7 +319,7 @@ class _MagneticDetectorScreenState extends State<MagneticDetectorScreen> {
           value: currentValue,
           min: min,
           max: max,
-          divisions: ((max - min) * 10)
+          divisions: ((max - min) * divisiones)
               .round(), // 10 divisiones por unidad para mejor granularidad
           label: displayValue,
           onChanged: onChanged,
