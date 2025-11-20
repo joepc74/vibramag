@@ -208,7 +208,7 @@ class _MagneticDetectorScreenState extends State<MagneticDetectorScreen> {
             _buildSlider(
               'Umbral de Vibración (μT)',
               _umbral,
-              100.0,
+              10.0,
               500.0,
               (value) => _guardarUmbral(value),
               '${_umbral.toStringAsFixed(0)} μT',
